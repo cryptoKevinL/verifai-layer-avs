@@ -1,4 +1,4 @@
-# AVS Oracle Example
+# AVS Oracle Example - Verify if images or videos are AI generated or not
 
 This is a simple, yet realistic, example of an AVS built on Layer, which shows the power of WASI
 to do something beyond simple squaring (which can be done in a contract).
