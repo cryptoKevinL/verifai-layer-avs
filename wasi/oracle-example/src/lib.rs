@@ -1,63 +1,57 @@
 #[allow(warnings)]
 mod bindings;
+
+use anyhow::anyhow;
+use serde_json::json;
+use layer_wasi::Reactor;
 use bindings::{Guest, Output, TaskQueueInput};
+use serde::{Deserialize, Serialize};
 
-mod coin_gecko;
-mod price_history;
+#[derive(Deserialize, Debug)]
+pub struct TaskRequestData {
+    pub object_url: String,
+}
 
-use layer_wasi::{block_on, Reactor};
-
-use serde::Serialize;
-use std::time::{SystemTime, UNIX_EPOCH};
-
+#[derive(Serialize, Debug)]
+pub struct TaskResponseData {
+    pub res: String,
+}
 struct Component;
 
 impl Guest for Component {
-    fn run_task(_input: TaskQueueInput) -> Output {
-        block_on(get_avg_btc)
-    }
-}
+    fn run_task(request: TaskQueueInput) -> Output {
+        let TaskRequestData { object_url } = serde_json::from_slice(&request.request)
+            .map_err(|e| anyhow!("Could not deserialize input request from JSON: {}", e))
+            .unwrap();
+        
+        let api_url = "https://api.aiornot.com/v1/reports/image";
+        let auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ijc0Y2M1OTFkLThhN2QtNDQyNi1iNzk3LTljODQ1YTAxMTM0YyIsInVzZXJfaWQiOiI3NGNjNTkxZC04YTdkLTQ0MjYtYjc5Ny05Yzg0NWEwMTEzNGMiLCJhdWQiOiJhY2Nlc3MiLCJleHAiOjAuMH0.0jNxXFIYPhYLxlTYjstUodxw4AeBLNHS4AWWIcxXoUs";
+        let reactor = Reactor::default();
+        
+        let mut req = reactor.request(api_url).context("Failed to create request")?;
+        req.set_method("POST");
+        req.headers_mut().append("Authorization", format!("Bearer {}", auth_token));
+        req.headers_mut().append("Content-Type", "application/json");
+        req.headers_mut().append("Accept", "application/json");
 
-/// Record the latest BTCUSD price and return the JSON serialized result to write to the chain.
-async fn get_avg_btc(reactor: Reactor) -> Result<Vec<u8>, String> {
-    let api_key = std::env::var("API_KEY").or(Err("missing env var `API_KEY`".to_string()))?;
-    let price = coin_gecko::get_btc_usd_price(&reactor, &api_key)
-        .await
-        .map_err(|err| err.to_string())?
-        .ok_or("invalid response from coin gecko API")?;
+        let body = json!({
+            "object": object_url
+        });
 
-    // read previous price history
-    let mut history = price_history::PriceHistory::read()?;
+        req.set_body(body.to_string());
 
-    // get current time in secs
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("failed to get current time")
-        .as_secs();
+        let res = reactor.send(req).context("Failed to send request")?;
 
-    // record latest price
-    history.record_latest_price(now, price)?;
+        // match res.status() {
+        //     200 => res.into_body().context("Failed to parse response body"),
+        //     status => Err(anyhow!("Unexpected status code: {}", status)),
+        // }
 
-    // calculate average price over the past hour
-    let avg_last_hour = history.average(now - 3600);
+        println!("AI image or not = {}", res);
 
-    CalculatedPrices {
-        price: avg_last_hour.price.to_string(),
-    }
-    .to_json()
-}
-
-/// The returned result.
-#[derive(Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct CalculatedPrices {
-    price: String,
-}
-
-impl CalculatedPrices {
-    /// Serialize to JSON.
-    fn to_json(&self) -> Result<Vec<u8>, String> {
-        serde_json::to_vec(&self).map_err(|err| err.to_string())
+        Ok(serde_json::to_vec(&TaskResponseData { res })
+            .map_err(|e| anyhow!("Could not serialize output data into JSON: {}", e))
+            .unwrap())
     }
 }
 

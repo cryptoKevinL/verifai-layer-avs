@@ -1,32 +1,27 @@
-use layer_wasi::{Reactor, Request, WasiPollable};
+use layer_wasi::Reactor;
+use anyhow::{Result, Context, anyhow};
+use serde_json::json;
 
-use serde::Deserialize;
-use std::collections::HashMap;
+pub fn check_ai_image(reactor: &Reactor, object_url: &str) -> Result<String> {
+    let api_url = "https://api.aiornot.com/v1/reports/image";
+    let auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6Ijc0Y2M1OTFkLThhN2QtNDQyNi1iNzk3LTljODQ1YTAxMTM0YyIsInVzZXJfaWQiOiI3NGNjNTkxZC04YTdkLTQ0MjYtYjc5Ny05Yzg0NWEwMTEzNGMiLCJhdWQiOiJhY2Nlc3MiLCJleHAiOjAuMH0.0jNxXFIYPhYLxlTYjstUodxw4AeBLNHS4AWWIcxXoUs";
 
-#[derive(Deserialize, Debug)]
-pub struct CoinInfo {
-    pub value: f32,
-}
+    let mut req = reactor.request(api_url).context("Failed to create request")?;
+    req.set_method("POST");
+    req.headers_mut().append("Authorization", format!("Bearer {}", auth_token));
+    req.headers_mut().append("Content-Type", "application/json");
+    req.headers_mut().append("Accept", "application/json");
 
-#[derive(Deserialize, Debug)]
-pub struct CoinGeckoResponse {
-    pub rates: HashMap<String, CoinInfo>,
-}
+    let body = json!({
+        "object": object_url
+    });
 
-impl CoinGeckoResponse {
-    fn btc_usd(&self) -> Option<f32> {
-        self.rates.get("usd").map(|info| info.value)
-    }
-}
+    req.set_body(body.to_string());
 
-pub async fn get_btc_usd_price(reactor: &Reactor, api_key: &str) -> Result<Option<f32>, String> {
-    let mut req = Request::get("https://api.coingecko.com/api/v3/exchange_rates")?;
-    req.headers = vec![("x-cg-pro-api-key".to_string(), api_key.to_owned())];
-    let res = reactor.send(req).await?;
+    let res = reactor.send(req).context("Failed to send request")?;
 
-    match res.status {
-        200 => res.json::<CoinGeckoResponse>().map(|info| info.btc_usd()),
-        429 => Err("rate limited, price unavailable".to_string()),
-        status => Err(format!("unexpected status code: {status}")),
+    match res.status() {
+        200 => res.into_body().context("Failed to parse response body"),
+        status => Err(anyhow!("Unexpected status code: {}", status)),
     }
 }
